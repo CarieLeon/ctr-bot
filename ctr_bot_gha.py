@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""CTR Bot v5 — Debug + robuste"""
-import sys, json, os, time, random, asyncio
+"""CTR Bot v6 — Proxy via Playwright native API"""
+import sys, json, os, time, random, asyncio, re
 from datetime import datetime, timezone
 from playwright.async_api import async_playwright
 
 PROXY_URL = os.environ.get("PROXY_URL", "")
-PROXY_USER = os.environ.get("PROXY_USER", "")
-PROXY_PASS = os.environ.get("PROXY_PASS", "")
 
-# Build proxy server arg for Chrome
-PROXY_ARG = ""
+# Parse proxy
+PROXY_HOST, PROXY_USER, PROXY_PASS = "", "", ""
 if PROXY_URL:
-    PROXY_ARG = f"--proxy-server={PROXY_URL}"
-elif PROXY_USER and PROXY_PASS:
-    PROXY_ARG = f"--proxy-server=http://{PROXY_USER}:{PROXY_PASS}@res.proxy-seller.com:10000"
+    m = re.match(r'https?://(.+?):(.+?)@(.+)', PROXY_URL)
+    if m:
+        PROXY_USER, PROXY_PASS, PROXY_HOST = m.group(1), m.group(2), m.group(3)
+    else:
+        PROXY_HOST = PROXY_URL
 
 TARGET = "agenceseo-annecy.fr"
 
@@ -27,12 +27,10 @@ KEYWORDS = [
 ]
 
 async def search_keyword(page, kw):
-    result = {"keyword": kw, "success": False, "position": None, "debug": {}}
-    
+    result = {"keyword": kw, "success": False, "position": None}
     try:
-        # Google home
-        await page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(random.uniform(0.5, 1))
+        await page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(random.uniform(0.5, 1.5))
         
         # Cookies
         try:
@@ -40,103 +38,69 @@ async def search_keyword(page, kw):
             if btn: await btn.click()
         except: pass
         
-        await asyncio.sleep(0.5)
-        
-        # Search
         search = await page.query_selector('textarea[name="q"]')
         if not search:
-            result["debug"]["error"] = "no search box"
+            result["error"] = "no search box"
             return result
         
         await search.click()
         await search.fill(kw)
         await page.keyboard.press("Enter")
-        
-        # Wait for results to load
-        await page.wait_for_load_state("networkidle", timeout=30000)
+        await page.wait_for_load_state("networkidle", timeout=20000)
         await asyncio.sleep(1)
         
-        # DEBUG: Log page info
+        # Check results
         title = await page.title()
-        url = page.url
-        result["debug"]["title"] = title
-        result["debug"]["url"] = url
-        
-        # Check for captcha/block
-        body_text = await page.evaluate("document.body.innerText")
-        if "captcha" in body_text.lower()[:500]:
-            result["debug"]["blocked"] = "captcha"
-            return result
-        if "unusual traffic" in body_text.lower()[:500]:
-            result["debug"]["blocked"] = "unusual traffic"
-            return result
-        
-        # Get all result links and text
-        all_results = await page.evaluate("""() => {
-            const items = [];
-            // Method 1: Look for all h3 inside search results
-            document.querySelectorAll('h3').forEach((h3, i) => {
-                const link = h3.closest('a');
-                const parent = h3.closest('div[data-hveid], div.g');
-                items.push({
-                    type: 'h3',
-                    index: i,
-                    text: h3.innerText.trim(),
-                    href: link ? link.href : '',
-                    parentClass: parent ? parent.className : ''
-                });
-            });
-            // Method 2: Look for all search result links
-            document.querySelectorAll('a[href*="agenceseo"], a[href*="annecy"]').forEach((a) => {
-                items.push({
-                    type: 'link_match',
-                    href: a.href,
-                    text: a.innerText.trim().substring(0,80)
-                });
-            });
-            return items;
-        }""")
-        
-        result["debug"]["results"] = all_results[:20]
+        result["debug_title"] = title
         
         # Find our site
+        all_links = await page.evaluate(f"""(t) => {{
+            const results = [];
+            document.querySelectorAll('h3').forEach((h3, i) => {{
+                const a = h3.closest('a');
+                const url = a ? a.href : '';
+                results.push({{pos: i+1, text: h3.innerText.trim().substring(0,60), url: url.substring(0,100)}});
+            }});
+            return results;
+        }}""")
+        
+        result["serp_results"] = all_links[:5]
+        
         found = False
-        for item in all_results:
-            if item["type"] == "h3" and TARGET in item.get("href", ""):
-                result["position"] = item["index"] + 1
-                found = True
-                break
-            if TARGET in item.get("href", ""):
-                result["position"] = "found"
+        for link_info in all_links:
+            if TARGET in link_info.get("url", ""):
+                result["position"] = link_info["pos"]
                 found = True
                 break
         
-        # If found, click and simulate visit
         if found:
             our_link = await page.query_selector(f'a[href*="{TARGET}"]')
             if our_link:
                 await our_link.click()
-                await page.wait_for_load_state("networkidle", timeout=30000)
-                await asyncio.sleep(random.uniform(15, 30))
+                await page.wait_for_load_state("networkidle", timeout=20000)
+                # Dwell time
+                for _ in range(random.randint(2, 4)):
+                    await page.evaluate(f'window.scrollBy(0, {random.randint(100, 400)})')
+                    await asyncio.sleep(random.uniform(1, 3))
+                await asyncio.sleep(random.uniform(10, 25))
                 result["success"] = True
-                result["debug"]["visited"] = True
-                print(f"  ✅ Position #{result['position']}")
+                print(f"  ✅ #{result['position']}")
             else:
-                result["debug"]["click_error"] = "link not found after detection"
-                print(f"  ⚠️ Found in results but link not clickable")
+                result["error"] = "found but no link"
         else:
-            # Show what WAS found
-            top5 = [r for r in all_results if r["type"] == "h3"][:5]
-            if top5:
-                result["debug"]["serp_top"] = [r["text"][:50] for r in top5]
-                print(f"  ❌ Site pas trouve. Top 5: {[r['text'][:30] for r in top5]}")
-            else:
-                result["debug"]["serp_empty"] = True
-                print(f"  ❌ Aucun résultat h3 trouvé sur Google")
-    
+            blocked = False
+            try:
+                body = await page.evaluate("document.body.innerText.substring(0,200)")
+                if "captcha" in body.lower(): blocked = "captcha"
+                if "unusual traffic" in body.lower(): blocked = "blocked"
+            except: pass
+            result["error"] = f"not found (title: {title[:40]}, blocked: {blocked or 'no'})"
+            print(f"  ❌ {result['error']}")
+            
     except Exception as e:
-        result["debug"]["exception"] = str(e)[:100]
-        print(f"  ❌ Erreur: {str(e)[:80]}")
+        err = str(e)[:100]
+        result["error"] = err
+        print(f"  ❌ {err}")
     
     return result
 
@@ -146,9 +110,6 @@ async def run():
             "headless": True,
             "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         }
-        if PROXY_ARG:
-            browser_kwargs["args"].append(PROXY_ARG)
-        
         browser = await p.chromium.launch(**browser_kwargs)
         
         context_kwargs = {
@@ -156,6 +117,14 @@ async def run():
             "timezone_id": "Europe/Paris",
             "viewport": {"width": 1920, "height": 1080},
         }
+        # Playwright native proxy (with auth)
+        if PROXY_HOST:
+            proxy_cfg = {"server": f"http://{PROXY_HOST}"}
+            if PROXY_USER:
+                proxy_cfg["username"] = PROXY_USER
+                proxy_cfg["password"] = PROXY_PASS
+            context_kwargs["proxy"] = proxy_cfg
+            print(f"🌐 Proxy: {PROXY_HOST}")
         
         context = await browser.new_context(**context_kwargs)
         page = await context.new_page()
@@ -164,20 +133,18 @@ async def run():
         try:
             await page.goto("https://api.ipify.org", wait_until="domcontentloaded", timeout=15000)
             ip = await page.evaluate("document.body.innerText")
-            print(f"🌐 Proxy IP: {ip.strip()}")
-            result["debug"] = {"proxy_ip": ip.strip()}
-        except:
-            print("🌐 Proxy: OK")
+            print(f"🌐 IP: {ip.strip()}")
+        except Exception as e:
+            print(f"🌐 Proxy test: {str(e)[:50]}")
         
         results = []
         for i, kw in enumerate(KEYWORDS):
             print(f"\n[{i+1}/{len(KEYWORDS)}] {kw}")
             r = await search_keyword(page, kw)
             results.append(r)
-            
             if i < len(KEYWORDS) - 1:
-                pause = random.randint(15, 45)
-                print(f"    ⏳ pause {pause}s...")
+                pause = random.randint(15, 40)
+                print(f"    ⏳ {pause}s")
                 await asyncio.sleep(pause)
         
         await browser.close()
@@ -187,13 +154,10 @@ async def run():
         print(f"RESULTS: {ok}/{len(KEYWORDS)}")
         for r in results:
             s = "✅" if r["success"] else "❌"
-            debug_info = r.get("debug", {})
-            blocked = debug_info.get("blocked", "")
-            pos = r.get("position", f"({r.get('error','?')})")
-            print(f"  {s} {r['keyword'][:30]:30s} -> {pos} {blocked}")
+            p = r.get("position", r.get("error", "?"))
+            print(f"  {s} {r['keyword'][:30]:30s} -> {p}")
         
-        summary_path = "/tmp/ctr_results.json"
-        with open(summary_path, "w") as f:
+        with open("/tmp/ctr_results.json", "w") as f:
             json.dump({"results": results, "time": datetime.now(timezone.utc).isoformat()}, f, indent=2, default=str)
 
 if __name__ == "__main__":
