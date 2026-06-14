@@ -10,17 +10,19 @@ PROXY_PASS = os.environ.get("PROXY_PASS", "")
 
 # Parse proxy URL
 import re
+PROXY_HOST_PORT = ""
+PROXY_AUTH = None
 if PROXY_URL and not PROXY_USER:
     m = re.match(r'https?://(.+?):(.+?)@(.+)', PROXY_URL)
     if m:
-        PROXY_USER, PROXY_PASS, PROXY_HOST = m.groups()
-        PROXY_SERVER = f"http://{PROXY_HOST}"
+        PROXY_USER, PROXY_PASS, PROXY_HOST_PORT = m.groups()[0], m.groups()[1], m.groups()[2]
+        PROXY_AUTH = (PROXY_USER, PROXY_PASS)
     else:
-        PROXY_SERVER = PROXY_URL
+        PROXY_HOST_PORT = PROXY_URL
 elif PROXY_URL:
-    PROXY_SERVER = PROXY_URL
-else:
-    PROXY_SERVER = ""
+    PROXY_HOST_PORT = PROXY_URL
+    if PROXY_USER:
+        PROXY_AUTH = (PROXY_USER, PROXY_PASS)
 
 TARGET = "agenceseo-annecy.fr"
 
@@ -37,6 +39,10 @@ async def search_keyword(page, kw):
     result = {"keyword": kw, "success": False, "position": None, "debug": {}}
     
     try:
+        # Proxy auth if needed
+        if PROXY_AUTH:
+            await page.authenticate({"username": PROXY_AUTH[0], "password": PROXY_AUTH[1]})
+        
         # Google home
         await page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=60000)
         await asyncio.sleep(random.uniform(0.5, 1))
@@ -153,6 +159,8 @@ async def run():
             "headless": True,
             "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         }
+        if PROXY_HOST_PORT:
+            browser_kwargs["args"].append(f'--proxy-server={PROXY_HOST_PORT}')
         
         browser = await p.chromium.launch(**browser_kwargs)
         
@@ -161,12 +169,6 @@ async def run():
             "timezone_id": "Europe/Paris",
             "viewport": {"width": 1920, "height": 1080},
         }
-        if PROXY_SERVER:
-            proxy_config = {"server": PROXY_SERVER}
-            if PROXY_USER:
-                proxy_config["username"] = PROXY_USER
-                proxy_config["password"] = PROXY_PASS
-            context_kwargs["proxy"] = proxy_config
         
         context = await browser.new_context(**context_kwargs)
         page = await context.new_page()
