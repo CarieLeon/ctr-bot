@@ -4,7 +4,24 @@ import sys, json, os, time, random, asyncio
 from datetime import datetime, timezone
 from playwright.async_api import async_playwright
 
-PROXY = os.environ.get("PROXY_URL", "")
+PROXY_URL = os.environ.get("PROXY_URL", "")
+PROXY_USER = os.environ.get("PROXY_USER", "")
+PROXY_PASS = os.environ.get("PROXY_PASS", "")
+
+# Parse proxy URL
+import re
+if PROXY_URL and not PROXY_USER:
+    m = re.match(r'https?://(.+?):(.+?)@(.+)', PROXY_URL)
+    if m:
+        PROXY_USER, PROXY_PASS, PROXY_HOST = m.groups()
+        PROXY_SERVER = f"http://{PROXY_HOST}"
+    else:
+        PROXY_SERVER = PROXY_URL
+elif PROXY_URL:
+    PROXY_SERVER = PROXY_URL
+else:
+    PROXY_SERVER = ""
+
 TARGET = "agenceseo-annecy.fr"
 
 KEYWORDS = [
@@ -21,7 +38,7 @@ async def search_keyword(page, kw):
     
     try:
         # Google home
-        await page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=20000)
+        await page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=60000)
         await asyncio.sleep(random.uniform(0.5, 1))
         
         # Cookies
@@ -43,7 +60,7 @@ async def search_keyword(page, kw):
         await page.keyboard.press("Enter")
         
         # Wait for results to load
-        await page.wait_for_load_state("networkidle", timeout=15000)
+        await page.wait_for_load_state("networkidle", timeout=30000)
         await asyncio.sleep(1)
         
         # DEBUG: Log page info
@@ -106,7 +123,7 @@ async def search_keyword(page, kw):
             our_link = await page.query_selector(f'a[href*="{TARGET}"]')
             if our_link:
                 await our_link.click()
-                await page.wait_for_load_state("networkidle", timeout=15000)
+                await page.wait_for_load_state("networkidle", timeout=30000)
                 await asyncio.sleep(random.uniform(15, 30))
                 result["success"] = True
                 result["debug"]["visited"] = True
@@ -144,8 +161,12 @@ async def run():
             "timezone_id": "Europe/Paris",
             "viewport": {"width": 1920, "height": 1080},
         }
-        if PROXY:
-            context_kwargs["proxy"] = {"server": PROXY}
+        if PROXY_SERVER:
+            proxy_config = {"server": PROXY_SERVER}
+            if PROXY_USER:
+                proxy_config["username"] = PROXY_USER
+                proxy_config["password"] = PROXY_PASS
+            context_kwargs["proxy"] = proxy_config
         
         context = await browser.new_context(**context_kwargs)
         page = await context.new_page()
