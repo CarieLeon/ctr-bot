@@ -2,35 +2,29 @@ name: CTR Bot Daily
 
 on:
   schedule:
-    # 3 fois par jour: 9h, 14h, 18h (heures FR = UTC+2, donc 7h, 12h, 16h UTC)
     - cron: '0 7 * * *'
     - cron: '0 12 * * *'
     - cron: '0 16 * * *'
-  workflow_dispatch:  # Permet de lancer manuellement
+  workflow_dispatch:
 
 jobs:
   ctr_bot:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    
     steps:
       - uses: actions/checkout@v4
-      
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      
       - name: Install Playwright
         run: |
           pip install playwright
           python3 -m playwright install chromium
-      
       - name: Run CTR Bot
         env:
           PROXY_URL: ${{ secrets.PROXY_URL }}
         run: python3 ctr_bot_gha.py
-      
       - name: Upload Results
         uses: actions/upload-artifact@v4
         with:
